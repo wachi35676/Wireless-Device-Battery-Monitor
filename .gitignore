@@ -6,3 +6,4 @@ dist/
 third_party/
 .claude/
 CLAUDE.md
+build-msvc/
