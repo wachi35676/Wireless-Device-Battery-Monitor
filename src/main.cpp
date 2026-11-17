@@ -29,8 +29,10 @@ constexpr UINT PLACEHOLDER_ID = 1;
 
 enum MenuId : UINT {
     ID_REFRESH = 100, ID_AUTOSTART, ID_HIDE_LAST_KNOWN, ID_WIDGET_BACKGROUND, ID_EXIT, ID_MODE_WIDGET, ID_MODE_TRAY, ID_OTHER_TASKBARS,
-    ID_DEVICE_FIRST = 1000
+    ID_STYLE_PERCENT, ID_STYLE_RING, ID_SIDE_RIGHT, ID_SIDE_LEFT,
+    ID_DEVICE_FIRST = 1000, ID_ORDER_FIRST = 3000
 };
+enum OrderAction : UINT { ORDER_LEFT, ORDER_RIGHT, ORDER_START, ORDER_END, ORDER_ACTIONS };
 
 const wchar_t* kAppName = L"Wireless Battery";
 const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -140,6 +142,35 @@ bool LoadWidgetBackground() { return LoadBoolSetting(L"WidgetBackground", false)
 void SaveWidgetBackground(bool on) { SaveBoolSetting(L"WidgetBackground", on); }
 bool LoadOtherTaskbars() { return LoadBoolSetting(L"OtherTaskbars", true); }
 void SaveOtherTaskbars(bool on) { SaveBoolSetting(L"OtherTaskbars", on); }
+// Ring style / left placement are stored as booleans (false = the default percentage / right).
+widget::Style LoadStyle() { return LoadBoolSetting(L"RingStyle", false) ? widget::Style::Ring : widget::Style::Percent; }
+void SaveStyle(widget::Style s) { SaveBoolSetting(L"RingStyle", s == widget::Style::Ring); }
+widget::Side LoadSide() { return LoadBoolSetting(L"LeftSide", false) ? widget::Side::Left : widget::Side::Right; }
+void SaveSide(widget::Side s) { SaveBoolSetting(L"LeftSide", s == widget::Side::Left); }
+
+// Device order on the taskbar chosen by the user (keys, left to right), stored as a REG_MULTI_SZ.
+// Devices not in it follow in the default order (headset, mouse, keyboard, gamepad, others).
+std::vector<std::wstring> g_order;
+
+void LoadOrder() {
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"DeviceOrder", RRF_RT_REG_MULTI_SZ, nullptr, nullptr, &size) != ERROR_SUCCESS || !size)
+        return;
+    std::vector<wchar_t> buf(size / sizeof(wchar_t) + 1, 0);
+    if (RegGetValueW(HKEY_CURRENT_USER, kSettingsKey, L"DeviceOrder", RRF_RT_REG_MULTI_SZ, nullptr, buf.data(), &size) != ERROR_SUCCESS)
+        return;
+    for (const wchar_t* p = buf.data(); *p; p += wcslen(p) + 1) g_order.push_back(p);
+}
+
+void SaveOrder() {
+    std::wstring multi;
+    for (const auto& k : g_order) { multi += k; multi.push_back(L'\0'); }
+    multi.push_back(L'\0');
+    RegSetKeyValueW(HKEY_CURRENT_USER, kSettingsKey, L"DeviceOrder", REG_MULTI_SZ, multi.data(), (DWORD)(multi.size() * sizeof(wchar_t)));
+}
+
+widget::Style g_style = widget::Style::Percent;
+widget::Side g_side = widget::Side::Right;
 
 bool AutostartEnabled() {
     wchar_t buf[MAX_PATH * 2];
@@ -378,15 +409,43 @@ int KindOrder(DeviceKind k) {  // headset first, then mouse, ... (matches the le
     }
 }
 
-void UpdateWidget() {
-    if (!g_useWidget) return;
+// Position in the user's order, or after all ordered devices in the default kind order.
+int OrderRank(const TrayEntry& e) {
+    for (size_t i = 0; i < g_order.size(); i++)
+        if (g_order[i] == e.st.key) return (int)i;
+    return 10000 + KindOrder(e.st.kind);
+}
+
+// Devices shown on the taskbar, left to right.
+std::vector<const TrayEntry*> WidgetEntries() {
     std::vector<const TrayEntry*> list;
     for (auto& [k, e] : g_entries)
         if (e.st.connected && !IsEntryHidden(e)) list.push_back(&e);
     std::sort(list.begin(), list.end(), [](const TrayEntry* a, const TrayEntry* b) {
-        int ka = KindOrder(a->st.kind), kb = KindOrder(b->st.kind);
-        return ka != kb ? ka < kb : a->st.name < b->st.name;
+        int ra = OrderRank(*a), rb = OrderRank(*b);
+        return ra != rb ? ra < rb : a->st.name < b->st.name;
     });
+    return list;
+}
+
+// Moves one device (index `i` of the shown list `keys`) and saves the result. Devices that are in
+// the saved order but not shown right now keep their place after the shown ones.
+void MoveDevice(std::vector<std::wstring> keys, size_t i, UINT action) {
+    if (i >= keys.size()) return;
+    std::wstring k = keys[i];
+    keys.erase(keys.begin() + i);
+    size_t to = action == ORDER_LEFT ? (i ? i - 1 : 0) : action == ORDER_RIGHT ? std::min(i + 1, keys.size())
+              : action == ORDER_START ? 0 : keys.size();
+    keys.insert(keys.begin() + to, k);
+    for (const auto& old : g_order)
+        if (std::find(keys.begin(), keys.end(), old) == keys.end()) keys.push_back(old);
+    g_order = keys;
+    SaveOrder();
+}
+
+void UpdateWidget() {
+    if (!g_useWidget) return;
+    std::vector<const TrayEntry*> list = WidgetEntries();
     std::vector<WidgetItem> items;
     std::wstring tip;
     for (auto* e : list) {
@@ -513,6 +572,36 @@ void ShowMenu() {
     if (widget::HasOtherTaskbars())
         AppendMenuW(m, MF_STRING | (g_otherTaskbars ? MF_CHECKED : 0) | (g_wantWidget ? 0 : MF_GRAYED), ID_OTHER_TASKBARS,
                     L"Also show on other monitors' taskbars");
+
+    // Customize: style, position and order of the taskbar widget.
+    std::vector<std::wstring> orderKeys;  // ID_ORDER_FIRST + i * ORDER_ACTIONS + action -> orderKeys[i]
+    HMENU cust = CreatePopupMenu();
+    HMENU style = CreatePopupMenu();
+    AppendMenuW(style, MF_STRING, ID_STYLE_PERCENT, L"Percentage");
+    AppendMenuW(style, MF_STRING, ID_STYLE_RING, L"Ring");
+    CheckMenuRadioItem(style, ID_STYLE_PERCENT, ID_STYLE_RING, g_style == widget::Style::Ring ? ID_STYLE_RING : ID_STYLE_PERCENT, MF_BYCOMMAND);
+    HMENU side = CreatePopupMenu();
+    AppendMenuW(side, MF_STRING, ID_SIDE_RIGHT, L"Right, next to the system tray");
+    AppendMenuW(side, MF_STRING, ID_SIDE_LEFT, L"Left, next to the Widgets button");
+    CheckMenuRadioItem(side, ID_SIDE_RIGHT, ID_SIDE_LEFT, g_side == widget::Side::Left ? ID_SIDE_LEFT : ID_SIDE_RIGHT, MF_BYCOMMAND);
+    HMENU order = CreatePopupMenu();
+    auto shown = WidgetEntries();
+    if (shown.empty()) AppendMenuW(order, MF_STRING | MF_GRAYED, 0, L"No devices shown");
+    for (size_t i = 0; i < shown.size(); i++) {
+        UINT base = ID_ORDER_FIRST + (UINT)i * ORDER_ACTIONS;
+        bool first = i == 0, last = i + 1 == shown.size();
+        HMENU dev = CreatePopupMenu();
+        AppendMenuW(dev, MF_STRING | (first ? MF_GRAYED : 0), base + ORDER_LEFT, L"Move left");
+        AppendMenuW(dev, MF_STRING | (last ? MF_GRAYED : 0), base + ORDER_RIGHT, L"Move right");
+        AppendMenuW(dev, MF_STRING | (first ? MF_GRAYED : 0), base + ORDER_START, L"Move to the start");
+        AppendMenuW(dev, MF_STRING | (last ? MF_GRAYED : 0), base + ORDER_END, L"Move to the end");
+        AppendMenuW(order, MF_POPUP, (UINT_PTR)dev, shown[i]->st.name.c_str());
+        orderKeys.push_back(shown[i]->st.key);
+    }
+    AppendMenuW(cust, MF_POPUP, (UINT_PTR)style, L"Style");
+    AppendMenuW(cust, MF_POPUP, (UINT_PTR)side, L"Position");
+    AppendMenuW(cust, MF_POPUP, (UINT_PTR)order, L"Order");
+    AppendMenuW(m, MF_POPUP | (g_wantWidget ? 0 : MF_GRAYED), (UINT_PTR)cust, L"Customize");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_REFRESH, L"Refresh now");
     AppendMenuW(m, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, L"Start with Windows");
@@ -531,6 +620,18 @@ void ShowMenu() {
         case ID_WIDGET_BACKGROUND: SetWidgetBackground(!g_widgetBackground); break;
         case ID_MODE_WIDGET: SetMode(true); break;
         case ID_MODE_TRAY: SetMode(false); break;
+        case ID_STYLE_PERCENT:
+        case ID_STYLE_RING:
+            g_style = cmd == ID_STYLE_RING ? widget::Style::Ring : widget::Style::Percent;
+            SaveStyle(g_style);
+            widget::SetStyle(g_style);
+            break;
+        case ID_SIDE_RIGHT:
+        case ID_SIDE_LEFT:
+            g_side = cmd == ID_SIDE_LEFT ? widget::Side::Left : widget::Side::Right;
+            SaveSide(g_side);
+            widget::SetSide(g_side);
+            break;
         case ID_OTHER_TASKBARS:
             g_otherTaskbars = !g_otherTaskbars;
             SaveOtherTaskbars(g_otherTaskbars);
@@ -538,6 +639,12 @@ void ShowMenu() {
             break;
         case ID_EXIT: DestroyWindow(g_hwnd); break;
         default:
+            if (cmd >= ID_ORDER_FIRST && cmd < ID_ORDER_FIRST + orderKeys.size() * ORDER_ACTIONS) {
+                UINT rel = cmd - ID_ORDER_FIRST;
+                MoveDevice(orderKeys, rel / ORDER_ACTIONS, rel % ORDER_ACTIONS);
+                UpdateWidget();
+                break;
+            }
             if (cmd >= ID_DEVICE_FIRST && cmd < ID_DEVICE_FIRST + keys.size()) {
                 const std::wstring& key = keys[cmd - ID_DEVICE_FIRST];
                 if (!g_hidden.erase(key)) g_hidden.insert(key);
@@ -697,6 +804,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int) {
     g_wantWidget = LoadWidgetMode();
     g_otherTaskbars = LoadOtherTaskbars();
     widget::SetOtherTaskbars(g_otherTaskbars);
+    g_style = LoadStyle();
+    widget::SetStyle(g_style);
+    g_side = LoadSide();
+    widget::SetSide(g_side);
+    LoadOrder();
     g_hideLastKnown = LoadHideLastKnown();
     g_widgetBackground = LoadWidgetBackground();
     widget::SetBackground(g_widgetBackground);  // remembered by the widget across re-creation

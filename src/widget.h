@@ -18,6 +18,8 @@ struct WidgetItem {
 };
 
 namespace widget {
+enum class Style { Percent, Ring };  // "[icon] 93%" or a progress ring around the icon
+enum class Side { Right, Left };     // next to the tray, or at the left end (Windows 11, centred icons)
 // Creates the widget on the primary taskbar (and every horizontal secondary taskbar). Clicks are reported by posting `clickMsg` to `notifyWnd`.
 bool Create(HINSTANCE inst, HWND notifyWnd, UINT clickMsg, bool lightTheme);
 void Destroy();
@@ -30,6 +32,9 @@ void SetBackground(bool on);
 void SetOtherTaskbars(bool on);
 // True when a horizontal secondary-monitor taskbar exists.
 bool HasOtherTaskbars();
+void SetStyle(Style style);
+// Left falls back to Right on taskbars without room there (left-aligned icons, Windows 10).
+void SetSide(Side side);
 // Re-checks the taskbar layout and moves the widget if needed; call about once a second.
 // Returns false when the taskbar it was attached to is gone.
 bool Reposition();
