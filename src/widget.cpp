@@ -300,15 +300,16 @@ std::vector<Piece> Layout(const Bar& b, bool compact, int& width) {
         bool last = i + 1 == g_items.size();
         if (ring) {
             // Ring around the device icon: the arc is the charge, red when low, blue while charging.
-            int d = Px(b, 24);
+            int d = Px(b, 28);  // even, so the ring and the icon share an exact centre
+            d += d & 1;
             Mask track, arc;
-            RingMasks(d, std::max(2.0, d / 11.0), it.percent >= 0 ? it.percent / 100.0 : 0.0, track, arc);
+            RingMasks(d, std::max(2.0, d / 13.0), it.percent >= 0 ? it.percent / 100.0 : 0.0, track, arc);
             Piece p;
             p.w = d;
             p.layers.push_back({ std::move(track), fg, a * (g_light ? 45 : 60) / 255 });
             p.layers.push_back({ std::move(arc), it.charging ? charge : it.low ? red : fg, a });
             p.layers.push_back({ RenderMask(std::wstring(1, Glyph(it.kind, it.bluetooth)), icons), fg, a });
-            p.gapAfter = last ? 0 : Px(b, compact ? 6 : 10);
+            p.gapAfter = last ? 0 : Px(b, compact ? 5 : 8);
             out.push_back(std::move(p));
             continue;
         }
