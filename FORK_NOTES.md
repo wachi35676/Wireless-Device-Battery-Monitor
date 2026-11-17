@@ -9,6 +9,11 @@ changes below that are still waiting upstream. Each one is also open as its own 
 | Logitech G435 on its older Realtek receiver (`046D:0ACB`); longer wait for sleeping Logitech receiver mice | [#93](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/pull/93) | `logitech-g435-and-receiver-wake` |
 | Widget on secondary-monitor taskbars, with an on/off menu toggle | [#107](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/pull/107) | `multi-monitor-taskbars` |
 
+The `all-features-customize` branch is `all-features` plus a *Customize* menu (from
+[#110](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/pull/110)): a ring style instead of
+percentages, placement on the left of a Windows 11 taskbar (next to the Widgets button), and device order.
+It also adds the `RingStyle`, `LeftSide` and `DeviceOrder` settings.
+
 Already merged upstream, so included through `main`: phones linked with Microsoft Phone Link
 ([#96](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/pull/96)) and GameSir controllers in
 Xbox mode ([#106](https://github.com/krisgfx9/Wireless-Device-Battery-Monitor/pull/106)).
