@@ -706,7 +706,7 @@ bool PlaceBar(Bar& b) {
 
         // Optional user override in DPI-independent pixels (e.g. for custom padding).
         DWORD customOffset = 0, sz = sizeof(customOffset);
-        if (RegGetValueW(HKEY_CURRENT_USER, L"Software\WirelessBattery", L"TaskbarOffset",
+        if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\WirelessBattery", L"TaskbarOffset",
                          RRF_RT_REG_DWORD, nullptr, &customOffset, &sz) == ERROR_SUCCESS) {
             left -= Px(b, (int)customOffset);
         }
